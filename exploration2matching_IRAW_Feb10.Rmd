@@ -1,0 +1,591 @@
+---
+title: 'PS531 Group Work on Exploration 2: Engaging with Alternative Explanations with By Matched Stratification'
+author: "Jake Bowers, Isabella Raynal, Adrian Wong"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  pdf_document:
+    number_sections: true
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 8
+    latex_engine: xelatex
+    citation_package: biblatex
+    keep_tex: true
+geometry: "left=1.25in,right=1.25in,top=1in,bottom=1in"
+graphics: yes
+mainfont: "Helvetica"
+fontsize: 11pt
+bibliography: classbib.bib
+biblio-style: "authoryear-comp,natbib"
+---
+
+<!-- Make this document using library(rmarkdown); render("exploration1.Rmd") -->
+\input{mytexsymbols}
+
+
+```{r setup, echo=FALSE, results=FALSE, include=FALSE, cache=FALSE}
+library(here)
+source(here("rmd_setup.R"))
+```
+
+```{r loadlibs, echo=FALSE, include=FALSE, results=FALSE}
+library(tidyverse)
+library(coin)
+library(DeclareDesign)
+```
+
+"Hey data scientist!" The voice on the phone is chipper. "I am involved in a
+~~hearts and minds~~ anti-crime campaign for the peaceful and helpful United
+Nations now. I ran across this dataset and thought that it might teach me
+about whether I should fund public transportation to be ~~re~~built in order
+to decrease violence. I'm sending you the description and the code. I just
+can't get the code to work at all. Also, even if I could get it to work, I
+wouldn't know how to interpret any of it. Can you please help? Does
+infrastructure investment like this seem to decrease violence? Or produce
+other social goods? Here is what I found out."
+
+> In 2004 the municipality of Medell\'{i}n, Columbia built the first line
+ of the Metrocable --- a set of cable cars that connected poor neighborhoods
+ on the edges of the city to the center of the city \autocite{cerda2012reducing}.
+ Professor Magdalena Cerda and her collaborators asked whether this kind
+ of integration could improve life in these poor (and heretofore violent)
+ neighborhoods. We ~~extracted~~ were given some of the data from this project to use
+ here.\footnote{The articles can be both found in this web directory
+ \url{https://urldefense.com/v3/__http://jakebowers.org/Matching/__;!!DZ3fjg!vCkqSooqCG1-PDBmUkj-7ZMUFdlcindiJs8D0zXmdD0Pah6J6Nvf_GPPb-hRbjo_KvQ$ }.}
+
+```{r}
+library(MASS)
+library(RItools)
+library(optmatch)
+load(url("https://urldefense.com/v3/__http://jakebowers.org/Data/meddat.rda__;!!DZ3fjg!vCkqSooqCG1-PDBmUkj-7ZMUFdlcindiJs8D0zXmdD0Pah6J6Nvf_GPPb-hRfk67SeI$ "))
+```
+
+
+> The data Cerd\'{a} collected tell us about the roughly `r nrow(meddat)`
+neighborhoods in the study, `r signif(sum(meddat$nhTrt),2)` of which had
+access to the Metrocable line and `r signif(sum(1-meddat$nhTrt),2)` did not.
+
+> We don't have a formal codebook. Here are some guesses about the meanings of
+some of the variables. There are more variables in the data file than those
+listed here.
+
+```
+## The Intervention
+nhTrt        Intervention neighborhood (0=no Metrocable station, 1=Metrocable station)
+
+## Some Covariates (there are others, see the paper itself)
+nh03         Neighborhood id
+nhGroup      Treatment (T) or Control (C)
+nhTrt        Treatment (1) or Control (0)
+nhHom        Mean homicide rate per 100,000 population in 2003
+nhDistCenter Distance to city center (km)
+nhLogHom     Log Homicide (i.e. log(nhHom))
+
+## Outcomes (BE03,CE03,PV03,QP03,TP03 are baseline versions)
+BE      Neighborhood amenities Score 2008
+CE      Collective Efficacy Score 2008
+PV      Perceived Violence Score 2008
+QP      Trust in local agencies Score 2008
+TP      Reliance on police Score 2008
+hom     Homicide rate per 100,000 population Score 2008-2003 (in log odds)
+
+HomCount2003 Number of homicides in 2003
+Pop2003      Population in 2003
+HomCount2008 Number of homicides in 2008
+Pop2008      Population in 2008
+```
+
+
+```{r}
+## These next are equivalent ways to get rates per 1000 from counts
+## meddat$HomRate03<-with(meddat, (HomCount2003/Pop2003)*1000)
+## meddat$HomRate08<-with(meddat, (HomCount2008/Pop2008)*1000)
+meddat<-transform(meddat, HomRate03=(HomCount2003/Pop2003)*1000)
+meddat<-transform(meddat, HomRate08=(HomCount2008/Pop2008)*1000)
+```
+
+> First we did this:
+
+```{r}
+
+covadjfmla <- reformulate(c("nhTrt",names(meddat)[c(5:7,9:24)],"HomRate03"),response="HomRate08")
+
+lm1 <- lm(covadjfmla,data=meddat)
+
+```
+
+> But then people yelled at us! They all yelled a different reason why this was the wrong approach. Can you tell me at least two or three different problems with adjusting for covariates in this way?
+
+ANSWER:
+Reformulate creates a formula.  It puts the response as the dependent variable and puts the rest as the independent variable.  It’s seeing if the treatment neighborhoods had an effect on the homicide rate in 2008 as compared to 2003.
+
+1. Given the high number of covariates, confounders are an issue, both observed and unobserved. For this argument, treatment (having metrocable) → less homicides.  Having a confounding variable would mean something else is causing fewer observed homicides in 2008.  One potential explanation is that there were other initiatives going on besides transportation.  The transportation initiative was started to help neighborhoods that had been identified as low income/violent.  Perhaps after identifying those neighborhoods, other initiatives - such as after school programs, etc. - were implemented and had an effect on lowering the homicide rate from 2003 to 2008.
+
+lm (with (meddat, HomRate08 ~ nhTrt))
+residuals(lm(with(meddat,HomRate08 ~ nhTrt)))
+
+2. The treatment does not appear to have been applied according to random sampling. If random sampling did occur, the researchers got very unlucky because the treatment group differs greatly from the non-treatment group. The homicide rate per capita in 2003 for the treatment sample is not IID, is not normal, and differs greatly from the homicide rate per capita in 2003 for the non-treatment group. 
+See
+mean(with(meddat,nhHom[nhTrt==0]))
+mean(with(meddat,nhHom[nhTrt==1]))
+qqnorm(with(meddat,nhHom[nhTrt==0]))
+qqnorm(with(meddat,nhHom[nhTrt==1]))
+mean(with(meddat,nhSisben[nhTrt==0]))
+mean(with(meddat,nhSisben[nhTrt==1]))
+mean(with(meddat,nhClass[nhTrt==0]))
+mean(with(meddat,nhClass[nhTrt==1]))
+mean(with(meddat,nhAgeYoung[nhTrt==0]))
+mean(with(meddat,nhAgeYoung[nhTrt==1]))
+
+The mean for the treatment group and control group are different.  In matching, you want to pair neighborhoods that are similar (ex. A young, wealthy neighborhood that received the treatment vs. a young, wealthy neighborhood that received the control).  In this study, the neighborhoods receiving treatments were not randomized and the neighborhoods receiving treatment may not have been the same as those who did not.  The Metrocables were built to connect poor and violent neighborhoods to the city, meaning that the treatment neighborhoods are poorer and more violent than those in the control group.  This also means the propensity scores would be uneven.  The propensity score is the “conditional probability of exposure to treatment given the observed covariates” (Rosenbaum 2010, ch 8).  If the initiative was targeting poor, violent neighborhoods, then those neighborhoods would have a higher probability of being chosen for the treatment group.
+
+The means that the propensity score is not constant (see Rosenabum, 2010, p. 166). Certain observational data could be used to predict treatment assignment.
+
+2a. test for "significant differences" across treatments, see Rosenbaum_2010 p. 163
+
+  "In part, the removal of five controls can have only a moderate impact on the distribution of covariates. In part, in such a small example, it is not entirely comfortable to discard five controls." p. 164
+
+3. there are very few treatment samples. Perhaps we should bootstrap the sample to generate more coefficients, then consider the mean coefficient produced, as described in Fox (2008) p. 660.
+
+> So, to avoid more yelling, we decided to actually "hold constant". We tried to make a matched design to counter alternative explanations for the intervention-versus-non-intervention comparison. We have `nhTrt` as our intervention or treatment and things measured in 2008 as outcomes with things measured in 2003 as occuring before the Metrocable was built. The other variables, measured before the treatment are plausibly covariates.
+
+> First we wanted to control for just baseline homicides and we had two choices. What are the trade-offs between these two? Can you interpret how they each "control" for baseline homicides? Which should we use and why? 
+
+ANSWER: The first choice is like what we did last week with a linear regression controlling for variables by removing linear relationships.  The second choice uses matching to pair up neighborhoods that are similar.  match_on creates the matrix showing squared difference in the estimated propensity score (Rosenbaum 2010, p. 168).  ‘fullmatch’ uses those propensity scores to match the covariates of treatment and control flexibly, allowing multiple controls to match to a single treatment and vice-versa, creating matching sets.  We can see with summary(fm0) that there is variable matching, which can create more closely matched sets by not fixing how many treatments have to be matched to a certain amount of controls.  The second option of matching, therefore, is better because it controls for things better by comparing similar neighborhoods.
+
+> After doing the reading (below) I was worried about interpolation, extrapolation, the curse of dimensionality, influential points and correct functional (but not any kind of collinearity). 
+
+ANSWER: Gelman and Hill (2007) discuss causal inference as well as interpolation and extrapolation.  They define causal inference as “what would happen to an outcome y as a result of a hypothesized ‘treatment’ or intervention… a special case of prediction in which the goal is to predict what would have happened under different treatment options.” (Gelman & Hill 2007, 167).  The latter part of this definition is especially important to this example.  We are seeing here whether the treatment is causing the homicide rate to go down, which is assuming that the homicide rate wouldn’t have gone down anyways over the five years for other reasons.
+
+Problems around interpolation and extrapolation occur if we attempt to infer that the trends from 2003 to 2008 will continue into the future, i.e. homicide rates will continue to go down following the trend demonstrated by the interpolation of 2003 - 2008 observations. The curse of dimensionality occurs when, by considering multiple covariates statistically we begin applying their coefficients in multi-dimensional space, beyond the 3-dimensional space in which they were observed. When this occurs, the quantity of available data (the observations) relative to the area within the multi-dimensional space decreases, affecting significance tests. 
+
+* notes: "If subjects were matched for e (x), they may be mismatched for x, but the mismatches in x will be due to chance and will tend to balance, particularly in large samples." (Rosenbaum, 2010, p. 166) ... "matching on e(x) tends to balance x ...  treatment assignment Z is conditionally independent of observed covari- ates x given the propensity score e (x)...if the propensity score e(x) is not balanced, then the observed covariates x will continue to be useful in predict- ing treatment Z."
+
+> I was also very confused about what `xBalance` was doing. Can you explain? 
+
+ANSWER: According to R Documentation, “Given covariates, a treatment variable, and a stratifying factor, calculates standardized mean differences along each covariate, with and without the stratification and tests for conditional independence of the treatment variable and the covariates within strata.”  We want to make sure that covariates are balanced, and xBalance makes sure to do so.  One of the ways to measure covariate imbalance is to check the absolute standardized difference in means to see if it is unusual.  xBalance shows the values for “raw” (pre-matching) versus “fm” (post-matching).  
+
+We also considered, without much conclusion yet, whether or not there are any clustering effects that we should be considering with xBalance. Because of the difference between measurement units and clusters, if cluster sizes are too large or vary (e.g. in this case, class, homerate and perceived violence all clustering together in a neighborhood), and we will need to account for this when trying to balance the covariates.
+
+We were unsure of how to find d^2, as suggested in Hansen and Bowers (2008) p. 233. After looking at d^2, we could potentially decide if the bias across sets is sufficiently small as would be expected in random sampling. 
+
+> And I didn't know how to understand the fact that `fullmatch` was producing sets with a varying number of controls and even treated observations -- of course I was only skimming the reading. Maybe you can help me?
+
+ANSWER: Full matching is when one control can be matched to several treated subjects.  The function fullmatch creates optimal matches within a group by creating a treatment-by-control discrepancy matrix.  In this case, absdist is being used to measure the desirability of the matches, and fullmatch is creating matching sets such as, 1 treatment to ‘n’ controls, or ‘n’ treatments to 1 control, or ‘n’ treatments to ‘m’ controls. This flexibility of matching allows for closer matching of covariates, but it also makes the data matching process weaker and more dependent on smaller numbers of observations (e.g. 6 treatments matched to only 1 single control, or in this case, 14 pair matches, but also a set with 1 treatment to 4 controls.).
+
+```{r}
+
+lm2 <- lm(HomRate08~nhTrt+HomRate03,data=meddat)
+coef(lm2)
+## Residuals plots?
+## Influential points like Cook's Distance?
+## Other functions of HomRate03? Should we use gam()? Or just ns() for splines?
+## ANSWER: ## Intercept: control group, so no transportation initiative, and when the homicide rate would be zero.  It’s saying when there is a treatment there’s less violence and there was more violence in 2003.  For every increase in unit of homicide rate in 2003, the homicide rate in 2008 would increase by 0.2, so 200 more homicides per year. 
+## Residuals plots? 
+## plot(residuals(lm2)) shows post points around the line, but there are some influential points
+## Influential points like Cook's Distance?
+## 111 and 407 are both influential points with high leverage and they were matched despite being relatively different neighborhoods.  Cook’s Distance will measure how much the regression model will change if that point is removed.
+## Other functions of HomRate03? Should we use gam(...,family=gaussian)? Or just ns() for splines?
+
+##The gam function and splines can be used for non-linear models, which can be especially applied if we think it would be helpful to apply a form of generalization to unseen, random data. Splines similarly fit smooth nonlinear functions on to the covariates, while retaining the additivity of the linear models from lm.
+
+## Scalar distance on baseline outcome
+tmp <- meddat$HomRate03
+names(tmp) <- rownames(meddat)
+absdist <- match_on(tmp, z = meddat$nhTrt) # The distance is the squared difference in the estimated propensity score, e􏰍(x). (Rosenbaum_2010_p168)
+
+fm0 <- fullmatch(absdist, data = meddat, min.controls = .5)
+summary(fm0)
+meddat$fm0 <- fm0
+
+xb0a<-xBalance(nhTrt~HomRate03,
+	      strata=list(raw=NULL,fm0=~fm0),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+
+# I+A: strata=list(raw=NULL,fm0=~fm0) - compares stratified to unstratified
+## ANSWER: We did not significantly balance because when we do mean(meandiff$diff) we can see that the homicide rates for the treatment group are still greater than those for the control group.
+
+xb0a
+meddat %>% group_by(fm0) %>% summarize(diff=mean(HomRate03[nhTrt==1])-mean(HomRate03[nhTrt==0]),n=n())
+
+# next 3 lines added by I+A
+meandiff<-meddat %>% group_by(fm0) %>% summarize(diff=mean(HomRate03[nhTrt==1])-mean(HomRate03[nhTrt==0]),n=n())
+mean(meandiff$diff) #0.4744
+
+lm3 <- lm_robust(HomRate08~nhTrt,fixed_effects = ~fm0,data=meddat)
+coef(lm3) #-0.3884 
+## ANSWER: This lm removes the observations that were not matched, making the covariate relationship between treatment group and control group (pre-treatment) more similar, while also making our data set smaller. This allows for better “matching” of treatment and control at the risk of increasing our p-value and limiting our ability to infer from the data. This, in combination with bootstrapping might be a better idea to test the hypothesis of the treatment. 
+## We see a less powerful effect of the treatment, but we still haven’t balanced enough.
+
+```
+> Next, people yelled a bit about how I was only controlling for one thing. So, I tried to use the matching approach to the `lm1` model above. 
+
+ANSWER: This is controlling for the 2003 Homicide rate, because that was predicting whether or not the neighborhood got the treatment as the initiative targeted more violent neighborhoods.
+
+```{r find_design}
+## Some commands like a formula object:
+balfmla<-reformulate(c(names(meddat)[c(5:7,9:24)],"HomRate03"),response="nhTrt")
+## Now he tries to control for more covariates with balfmla.
+
+xb0<-xBalance(balfmla,
+	      strata=list(raw=NULL),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+## Now the p-value is even higher after controlling for more covariates.
+
+## Ordinary Propensity score
+library(arm)
+### Why do these two glm models differ? Why use two of them? What is going on with glm1 here? What is separation in logistic regression models? Why should we care?
+glm1<-glm(balfmla,data=meddat,family=binomial)
+glm2<-bayesglm(balfmla,data=meddat,family=binomial)
+
+## ANSWER: We estimate propensity scores using a logit model, which are fitted using the glm function in R.  Separation in logistic regression models refers to the instance of perfectly predicting an outcome based on covariates. This is most frequent with small-sample and sparse-data bias (such as this study here with n=45). 
+## glm = “glm is used to fit generalized linear models, specified by giving a symbolic description of the linear predictor and a description of the error distribution.”
+## bayesglm = “Bayesian functions for generalized linear modeling with independent normal, t, or Cauchy prior distribution for the coefficients.”
+## Bayesian statistics are when you update the model based on reality.  glm uses the general linear relationship, whereas bayesglm updates that relationship based on what is actually going on.
+## We can see that glm1 and glm2 have some similarities and some differences.  For example, glm2 has a much lower intercept, but they have the same degrees of freedom.
+
+
+## Propensity score using elastic net with lambda chosen by cross-validation
+## Add scores back to data
+meddat$pscore<-predict(glm2) ## linear.predictors not probs
+
+## Make distance matrices
+psdist<-match_on(nhTrt~pscore,data=meddat)
+
+as.matrix(psdist)[1:5,1:5]
+
+## Rank-Based Mahalanobis distance (Rosenbaum, Chap 8) 
+mhdist<-match_on(balfmla,data=meddat,method="rank_mahalanobis") #check x data for normality, otherwise MD will ignore that data in matching
+
+## Question: why does the MD give more weight to binary variables with probabilities near zero than to those near 1/2? (ex. "a difference in race counts about as much as a 20-year difference in age." Rosenbaum, 2010, p. 171) Also, what should we make of this? "In many contexts, rare binary covariates are not of overriding importance, and out- liers do not make a covariate unimportant, so the Mahalanobis distance may not be appropriate with covariates of this kind." (ibid)
+
+## ANSWER: Takes huge data that he had before then uses “rank_mahalanobis” to show the difference between covariates based on similarity.  The smaller the number, the more matched they are.  The greater the Mahalanobis distance, the greater the difference between covariates???
+##“A simple alternative to the Mahalanobis distance (i) replaces each of the covari- ates, one at a time, by its ranks, with average ranks for ties, (ii) premultiplies and postmultiplies the covariance matrix of the ranks by a diagonal matrix whose di- agonal elements are the ratios of the standard deviation of untied ranks, 1,...,L, to the standard deviations of the tied ranks of the covariates, and (iii) computes the Mahalanobis distance using the ranks and this adjusted covariance matrix. Call this the ‘rank-based Mahalanobis distance.’ Step (i) limits the influence of outliers. After step (ii) is complete, the adjusted covariance matrix has a constant diagonal. Step (ii) prevents heavily tied covariates, such as rare binary variables, from having increased influence due to reduced variance.” (Rosenbaum, 2010, p. 171)
+
+#”a sturdy choice for a distance is the rank-based Mahalanobis distance within calipers on the propensity score, with the caliper width w adjusted to ensure good balance on the propensity score.” (Rosenbaum, 2010, p. 172)
+
+
+## Do it
+fm1<-fullmatch(mhdist,data=meddat) ##, min.controls=1) # min.controls=.5
+summary(fm1,data=meddat,min.controls=0,max.controls=Inf)
+
+## Add matched set indicators back to data
+meddat$fm1<-NULL
+meddat[names(fm1),"fm1"]<-fm1
+
+## We have to show that we have adjusted enough. Did we adjust enough?
+xb1<-xBalance(balfmla,
+	      strata=list(raw=NULL,fm1=~fm1),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+xb1$overall
+## The p-value is still getting higher.  xb1 creates a table in which we can see that the raw values are closer to the fm1 values, suggesting that we have balanced fairly well.
+
+## What is the biggest difference within set.
+diffswithinsets<-meddat %>% group_by(fm1) %>% summarize(meandiff = mean(HomRate03[nhTrt==1]) - mean(HomRate03[nhTrt==0]))
+summary(diffswithinsets$meandiff)
+## Which set is the biggest diff? Which neighborhoods are these?
+bigdiff<-diffswithinsets[which.max(diffswithinsets$meandiff),]
+meddat[meddat$fm1 == bigdiff$fm1,] #I+A: these are one treatment neighborhood and one control neighborhood, with very large differences between covariates. They must have been matched by fullmatch, even though their covariates have large differences. 
+##  111 and 407 are the ones with the biggest difference.  111 is a treatment group and 407 is the control.  Large differences in homicide rate, class, population, DistCent, etc. We can match covariates that are different if they have the same propensity score, however 111 has a pscore of 2.887 and 407 has a pscore of -10.306.  Yet, they were still matched as the same fm1.
+
+## Diff pre-matching
+with(meddat, mean(HomRate03[nhTrt==1]) - mean(HomRate03[nhTrt==0]))
+
+## What are the distances like? 
+quantile(as.vector(absdist),seq(0,1,.1))
+
+# I+A: plot(quantile(as.vector(absdist),seq(0,1,.1)))
+## Most of the data is within the distances 0-2, but then there is a large outlier at the end with a distance around 10, which would be for 111 and 407.
+
+## CALIPERS! (What is going on here?)
+## Calipers define the range that a propensity score must fall in to be considered a close match.
+caldist <- mhdist + caliper(absdist,1) #quantile(as.vector(absdist),seq(0,1,.1)) ## Only allowing for perfect matches.  Takes mh distance but kicks out any match that did not pass the full matching test.
+as.matrix(absdist)[1:5,1:5] ## just based on HomRate03
+as.matrix(mhdist)[1:5,1:5] ##based on more covariates
+as.matrix(caldist)[1:5,1:5]
+## quantile(as.vector(absdist),seq(0,1,.1))
+
+# ANSWER: These calipers are stratifying the data based on propensity scores. The code prints the ranked mahalanobis distance if and only if the squared difference in estimated propensity scored between the pair is less than 1. If the squared difference is greater than 1, “inf” is printed, and the ranked mahalanobis distance is not included for analysis. This excludes data that has the squared difference in estimated propensity score “too large,” which here is defined as greater than “1”.
+
+
+quantile(as.vector(mhdist),seq(0,1,.1)) ## Percentage of data that has a certain amount of mhdist.
+
+fm2<-fullmatch(psdist+caliper(absdist,2)+caliper(mhdist,50),data=meddat,tol=.00001,min.controls=1) ## Now the caliper is cutting at 2 and 50.  These calipers exclude the "worst" 10 percent-ish of the absdist and mhdist data. 
+summary(fm2)
+
+meddat$fm2<-NULL
+meddat[names(fm2),"fm2"]<-fm2
+
+xb2<-xBalance(balfmla,
+	      strata=list(raw=NULL,fm1=~fm1,fm2=~fm2),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+xb2$overall
+xb2$results["HomRate03",,]
+
+set.seed(12345)
+meddat$fakeZ <- sample(meddat$nhTrt)
+xbFake<-xBalance(update(balfmla,fakeZ~.),
+	      strata=list(raw=NULL),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+xbFake$results
+xbFake$overall
+```
+
+> And this is what the outcome analysis looked like
+
+```{r outcome_analysis}
+outcome1<-xBalance(nhTrt~HomRate08,
+	      strata=list(raw=NULL,fm1=~fm1,fm2=~fm2),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+outcome1$results
+lm3b<-lm_robust(HomRate08~nhTrt,data=meddat)
+lm3a<-lm_robust(HomRate08~nhTrt,fixed_effects=~fm1,data=meddat,subset=!is.na(meddat$fm1))
+lm3<-lm_robust(HomRate08~nhTrt,fixed_effects=~fm2,data=meddat,subset=!is.na(meddat$fm2))
+coef(lm3)["nhTrt"]
+```
+
+ANSWER: Does infrastructure investment like this seem to decrease violence? 
+coef(lm3)[“nhTrt”] produces a coefficient of -0.3884, which suggests that the treatment reduced violence by 388 homicides per 1000.  Therefore, yes, infrastructure investment like this seems to decrease violence.
+
+Or produce other social goods?  
+If we want to see whether this type of infrastructure investment produces other social goods, we can run the same analysis, but use one of the covariates below instead of Homicide Rate.
+
+
+Useful reading:
+ - *\citealp[Chap 21.4]{fox2008applied} explains about bootstrap hypothesis tests (i.e. sampling model justified hypothesis tests).
+
+ - \citealp[Chap 1,3,7,8,9,13]{rosenbaum2010design}  (\url{https://urldefense.com/v3/__http://www.springerlink.com/content/978-1-4419-1212-1/contents/__;!!DZ3fjg!vCkqSooqCG1-PDBmUkj-7ZMUFdlcindiJs8D0zXmdD0Pah6J6Nvf_GPPb-hR4eP8EH4$ })
+
+ - \citealp[Chap 9.0--9.2]{gelman2007dau} (on causal inference and the problems of interpolation and extrapolation)
+
+ - \citealp{hans:04} on full matching for adjustment
+
+ - \citealp{hansen2008cbs} on assessing balance.
+
+```{r}
+
+g <- ggplot(data=filter(meddat,HomRate03<9),
+            aes(x=HomRate03,y=HomRate08)) + 
+  geom_point()+
+  geom_smooth(method='lm',formula=y~x*I(x<2),se=FALSE,col='orange') + 
+  geom_smooth(method='lm',formula=y~ns(x,knots=c(0,2)),se=FALSE,col='green') +   geom_smooth(method='lm',formula=y~ns(x,df=3),se=FALSE,col='purple') + 
+  geom_smooth(method="lm",se=FALSE) + 
+  geom_smooth(method="loess",se=FALSE) +
+  geom_smooth(method="loess",span=1/4,se=FALSE,col="red") +
+  theme_bw()
+
+
+print(g)
+
+
+```
+
+# References
+
+Performed the analysis above for PV
+
+There are several other outcomes (public goods) measured in this observational study.  I am most interested in exploring the Perceived Violence Score.  Our analysis showed that these transportation initiatives were successful in decreasing homicides, but do people's perceptions match this reality\footnote{Note, this involves assuming that perceived violence related to homicides, and for this assumption I am ignoring other types of violence.}?  To measure whether the transportation initiatives were successful in lowering people's perceptions of violence, I will repeat the analysis we did above, but for the PV variable.
+
+```{r}
+
+covadjfmla_PV <- reformulate(c("nhTrt",names(meddat)[c(5:7,9:24)],"nhPV03"),response="PV")
+
+lm1_PV <- lm(covadjfmla_PV,data=meddat)
+
+coef(lm1_PV)
+
+plot(coef(lm1_PV))
+
+```
+
+```{r}
+
+lm2_PV <- lm(PV~nhTrt+nhPV03,data=meddat)
+coef(lm2_PV)
+## The intercept is approx 1.32.  The nhTrt coefficient is approx -0.78, which suggests that cities in the treatment group perceived less violence than those in the control group.  The nhPV03 coefficient is approx -3.76, which suggests that  perceived violence in 2003 had a powerful effect in decreasing perceived violence in 2008? -- However, the PV03 and PV08 seem to be measured based on different tests … PV03 is all decimals and positive numbers, but PV08 has a lot of negative scores with absolute value greater than 1.
+
+plot(coef(lm2_PV))
+
+## Scalar distance on baseline outcome
+tmp_PV <- meddat$nhPV03
+names(tmp_PV) <- rownames(meddat)
+absdist_PV <- match_on(tmp_PV, z = meddat$nhTrt)
+
+fm0_PV <- fullmatch(absdist_PV ,data=meddat,min.controls=.5)
+summary(fm0_PV) ## this shows that variable matching occurred, which can produce more accurate matches since there isn't a fixed ratio
+meddat$fm0_PV <- fm0_PV
+
+xb0a_PV<-xBalance(nhTrt~nhPV03,
+	      strata=list(raw=NULL,fm0_PV=~fm0_PV),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+
+xb0a_PV ## the chisquare value decreased from approx 1.55 to 0.07 and the p-value increased from approx 0.21 to 0.79.
+meddat %>% group_by(fm0_PV) %>% summarize(diff=mean(nhPV03[nhTrt==1])-mean(nhPV03[nhTrt==0]),n=n())
+
+lm3_PV <- lm_robust(PV~nhTrt,fixed_effects = ~fm0_PV,data=meddat)
+coef(lm3_PV) ##The coefficient for nhTrt is approx -0.82, which suggests that the perceived violence was lower for members of the treatment group.
+plot(coef(lm3_PV))
+```
+
+lm1_PV, lm2_PV, and lm3_PV all have negative coefficients for nhTrt, which suggests that perceived violence was lower for members of the treatment groups than it was for the control groups.
+
+```{r find_design}
+## Some commands like a formula object:
+balfmla_PV<-reformulate(c(names(meddat)[c(5:7,9:24)],"nhPV03"),response="nhTrt")
+
+xb0_PV<-xBalance(balfmla_PV,
+	      strata=list(raw=NULL),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+
+## Ordinary Propensity score
+library(arm)
+### Why do these two glm models differ? Why use two of them? What is going on with glm1 here? What is separation in logistic regression models? Why should we care?
+glm1_PV<-glm(balfmla_PV,data=meddat,family=binomial)
+glm2_PV<-bayesglm(balfmla_PV,data=meddat,family=binomial)
+
+## Propensity score using elastic net with lambda chosen by cross-validation
+## Add scores back to data
+meddat$pscore_PV<-predict(glm2_PV) ## linear.predictors not probs
+
+## Make distance matrices
+psdist_PV<-match_on(nhTrt~pscore_PV,data=meddat)
+
+as.matrix(psdist_PV)[1:5,1:5]
+
+## Rank-Based Mahalanobis distance (Rosenbaum, Chap 8)
+mhdist_PV<-match_on(balfmla_PV,data=meddat,method="rank_mahalanobis")
+
+## Do it
+fm1_PV<-fullmatch(mhdist_PV,data=meddat) ##, min.controls=1) # min.controls=.5
+summary(fm1_PV,data=meddat,min.controls=0,max.controls=Inf) ##21 sets were matched 1:1 and one set was matched 1:2.
+
+## Add matched set indicators back to data
+meddat$fm1_PV<-NULL
+meddat[names(fm1_PV),"fm1_PV"]<-fm1_PV
+
+## We have to show that we have adjusted enough. Did we adjust enough?
+xb1_PV<-xBalance(balfmla_PV,
+	      strata=list(raw=NULL,fm1_PV=~fm1_PV),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+xb1_PV$overall
+
+## What is the biggest difference within set.
+diffswithinsets_PV<-meddat %>% group_by(fm1_PV) %>% summarize(meandiff = mean(nhPV03[nhTrt==1]) - mean(nhPV03[nhTrt==0]))
+summary(diffswithinsets_PV$meandiff)
+##The mean difference was approx 0.04.  The biggest difference can be found by taking the larger of the absolute value of the minimum or maximum.  In this case, it would be -0.34904.
+## Which set is the biggest diff? Which neighborhoods are these?
+bigdiff_PV<-diffswithinsets_PV[which.max(diffswithinsets_PV$meandiff),]
+meddat[meddat$fm1_PV == bigdiff_PV$fm1_PV,]
+## As with the previous example of HomRate, the biggest difference is between neighborhoods 111 in the treatment group and 407 in the control group.
+
+## Diff pre-matching
+with(meddat, mean(nhPV03[nhTrt==1]) - mean(nhPV03[nhTrt==0]))
+## The difference between the mean Perceived Violence in 2003 amongst members of the treatment group minus the mean Perceived Violence in 2003 amongst members of the control group is approx 0.05.  This suggests that people perceived more violence in cities receiving the treatment than neighborhoods not receiving the treatment.  This makes sense.  We were told at the beginning that cities selected in 2003 to receive the treatment were neighborhoods with more violence.  It would therefore make sense that cities with more violence would have residents that perceived more violence in their neighborhood, assuming that people's perceptions matched reality.
+
+## What are the distances like? 
+quantile(as.vector(absdist_PV),seq(0,1,.1))
+## About 40% of distances are 0.10 or below.  About 70% are 0.20 or below.  Less than 10% are more than 0.50.
+plot(quantile(as.vector(absdist_PV),seq(0,1,.1)))
+## The data points here seem to follow a trend except for the last point, which could be an overly influential point.
+
+## CALIPERS! (What is going on here?)
+
+caldist_PV <- mhdist_PV + caliper(absdist_PV,1)
+as.matrix(absdist_PV)[1:5,1:5]
+as.matrix(mhdist_PV)[1:5,1:5]
+as.matrix(caldist_PV)[1:5,1:5]
+
+quantile(as.vector(mhdist_PV),seq(0,1,.1))
+plot(quantile(as.vector(mhdist_PV),seq(0,1,.1)))
+## This quantile plot has much higher values than the last.  This plot shows that both the lowest and highest points are overly influential points because the lowest is lower and the highest is higher than the overall trend.
+
+fm2_PV<-fullmatch(psdist_PV+caliper(absdist_PV,2)+caliper(mhdist_PV,50),data=meddat,tol=.00001,min.controls=1)
+summary(fm2_PV)  ##21 pairs were matched 1:1 and 1 pair was matched 1:2.
+
+meddat$fm2_PV<-NULL
+meddat[names(fm2_PV),"fm2_PV"]<-fm2_PV
+
+xb2_PV<-xBalance(balfmla_PV,
+	      strata=list(raw=NULL,fm1_PV=~fm1_PV,fm2_PV=~fm2_PV),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+xb2_PV$overall
+xb2_PV$results["nhPV03",,]
+
+set.seed(12345)
+meddat$fakeZ_PV <- sample(meddat$nhTrt)
+xbFake_PV<-xBalance(update(balfmla_PV,fakeZ_PV~.),
+	      strata=list(raw=NULL),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+xbFake_PV$results
+xbFake_PV$overall
+```
+
+```{r outcome_analysis}
+outcome1_PV<-xBalance(nhTrt~PV,
+	      strata=list(raw=NULL,fm1_PV=~fm1_PV,fm2_PV=~fm2_PV),
+	      data=meddat,
+	      report=c("std.diffs","z.scores","adj.means",
+		       "adj.mean.diffs", "chisquare.test","p.values"))
+outcome1_PV$results
+lm3b_PV<-lm_robust(PV~nhTrt,data=meddat)
+lm3a_PV<-lm_robust(PV~nhTrt,fixed_effects=~fm1_PV,data=meddat,subset=!is.na(meddat$fm1_PV))
+lm3_PV<-lm_robust(PV~nhTrt,fixed_effects=~fm2_PV,data=meddat,subset=!is.na(meddat$fm2_PV))
+coef(lm3_PV)["nhTrt"]
+```
+
+This updated lm3 shows that nhTrt has a coefficient of approximately -0.91.  This suggests that those in the treatment group perceived less violence in 2008 than those in the control group.  This provides evidence for the claim that this infrastructure intervention did produce other social goods besides decreasing homocides.  We could keep repeating this analysis for the other outcomes to see if and how the treatment affected those.
+
+I am wondering if the optimal matching Zubizarreta and Keele (2014) did in their research on school vouchers in Chile would be helpful for this variable.  For homicide rates, that was at the neighborhood level.  However, perceived violence is most likely at the individual level. It seems as if this variable takes the average perceived violence score for each neighborhood (cluster), and then this analysis matches individuals based on clusters.  Using optimal matching, Zubizarreta and Keele (2014) first matched individuals (students) before then matching clusters (schools).  I think it would be interesting for us to discuss in class whether their method might apply to this outcome variable of perceived violence, and which of the other social good outcome variables would benefit by beginning with individual matching before cluster matching.
+
+Useful reading:
+ - *\citealp[Chap 21.4]{fox2008applied} explains about bootstrap hypothesis tests (i.e. sampling model justified hypothesis tests).
+
+ - \citealp[Chap 1,3,7,8,9,13]{rosenbaum2010design}  (\url{https://urldefense.com/v3/__http://www.springerlink.com/content/978-1-4419-1212-1/contents/__;!!DZ3fjg!vCkqSooqCG1-PDBmUkj-7ZMUFdlcindiJs8D0zXmdD0Pah6J6Nvf_GPPb-hR4eP8EH4$ })
+
+ - \citealp[Chap 9.0--9.2]{gelman2007dau} (on causal inference and the problems of interpolation and extrapolation)
+
+ - \citealp{hans:04} on full matching for adjustment
+
+ - \citealp{hansen2008cbs} on assessing balance.
+
+```{r}
+
+g <- ggplot(data=filter(meddat,nhPV03<9),
+            aes(x=nhPV03,y=PV)) + 
+  geom_point()+
+  geom_smooth(method='lm',formula=y~x*I(x<2),se=FALSE,col='orange') + 
+  geom_smooth(method='lm',formula=y~ns(x,knots=c(0,2)),se=FALSE,col='green') +   geom_smooth(method='lm',formula=y~ns(x,df=3),se=FALSE,col='purple') + 
+  geom_smooth(method="lm",se=FALSE) + 
+  geom_smooth(method="loess",se=FALSE) +
+  geom_smooth(method="loess",span=1/4,se=FALSE,col="red") +
+  theme_bw()
+
+
+print(g)
+
+
+```
+
+# References
