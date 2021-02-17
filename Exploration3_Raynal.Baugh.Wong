@@ -1,6 +1,6 @@
 ---
   title: 'Exploration 3: Matrices make life easier.'
-author: "PS522 Group: Isabella Raynal, James Baugh, Adrian Wong"
+author: "PS531 Group: Isabella Raynal, James Baugh, Adrian Wong"
 date: '`r format(Sys.Date(), "%B %d, %Y")`'
 output:
   pdf_document:
